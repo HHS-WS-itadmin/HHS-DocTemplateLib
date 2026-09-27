@@ -1,17 +1,31 @@
 /**************************************************************************************************
- * Library inserted in Apps Scripts as DocKit - has the following functions:
+ * Library inserted in Apps Scripts as DocKit - has the following public functions:
  * 
+ * --- FOLDER & CONTENT UTILITIES ---
  * getArchiveFolderHierarchy(docId)
+ *    - Retrieves the folder hierarchy (Item, Series, Collection) for a given document.
  * insertBodyContentAtTop(sourceContainer, targetBody)
+ *    - Copies all elements from a source container and inserts them at the top of a target body.
  * copyContainerContents(sourceContainer, targetContainer)
+ *    - Copies all elements from a source container into a target container (e.g., footers).
+ * hexToRgb(hex, defaultHex)
+ *    - Converts standard hex color strings (e.g., "#ffffff") into decimal RGB objects for Docs API.
  * 
+ * --- ZERO-WIDTH SPACE (ZWS) PLACEHOLDER UTILITIES ---
  * getPlaceholderFromHeader(placeholder, headerType)
+ *    - Retrieves hidden metadata from the Document Header based on ZWS boundaries.
  * getPlaceholderFromBody(placeholder)
+ *    - Retrieves hidden metadata from the Document Body based on ZWS boundaries.
  * processPlaceholderInHeader(placeholder, newContent, headerType)
- * processPlaceholderSpaceBoundaries(placeholder, newContent)
- * processPlaceholder(placeholder, newContent) // Aliased to Space Boundaries
+ *    - Updates or inserts text in the Document Header using hidden ZWS boundaries.
+ * processPlaceholderSpaceBoundaries(placeholder, newContent, url)
+ *    - Updates or inserts text in the Document Body using hidden boundaries, optionally hyperlinking it.
+ * processPlaceholder(placeholder, newContent) 
+ *    - Legacy alias for processPlaceholderSpaceBoundaries.
  * 
- */
+ * Note: Functions ending in an underscore (e.g., generateZwsBoundaries_) are private internal helpers 
+ * and are not exposed when this library is imported.
+ **************************************************************************************************/
 
 /***************************************************************************************************
  * Retrieves the folder hierarchy for the given document based on the HHS Archiving structure.
