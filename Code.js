@@ -555,3 +555,91 @@ function getPlaceholderFromBody(placeholder) {
 
   return null;
 }
+
+/***************************************************************************************************
+ * Injects a 1x1 transparent image with metadata in its Alt-Text description.
+ * 
+ * @param {Object} propertiesObj - The key-value pairs to store.
+ * @param {string} location - "HEADER", "FOOTER", or "BODY".
+ **************************************************************************************************/
+function injectMetadataImage(propertiesObj, location) {
+  const doc = DocumentApp.getActiveDocument();
+  let section;
+  
+  if (location === "HEADER") {
+    section = doc.getHeader() || doc.addHeader();
+  } else if (location === "FOOTER") {
+    section = doc.getFooter() || doc.addFooter();
+  } else {
+    section = doc.getBody();
+  }
+  
+  // 1. Clean up existing metadata images in this section
+  const images = section.getImages();
+  for (let i = 0; i < images.length; i++) {
+    if (images[i].getAltTitle() === "DocKit_Meta") {
+      images[i].removeFromParent();
+    }
+  }
+  
+  // 2. Programmatically generate a 1x1 transparent PNG using Base64
+  const b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAAZdEVYdFNvZnR3YXJlAFBhaW50Lk5FVCB2My41LjbQg61aAAAADUlEQVQYV2P4//8/AwAI/AL+XvdLkQAAAABJRU5ErkJggg==";
+  const blob = Utilities.newBlob(Utilities.base64Decode(b64), "image/png", "meta.png");
+  
+  // 3. Inject at the very beginning of the first element to avoid adding extra blank lines
+  let firstChild = section.getNumChildren() > 0 ? section.getChild(0) : null;
+  let inlineImg = null;
+
+  if (firstChild && firstChild.getType() === DocumentApp.ElementType.PARAGRAPH) {
+    inlineImg = firstChild.asParagraph().insertInlineImage(0, blob);
+  } else {
+    // If the first child is a table or doesn't exist, insert a tiny paragraph
+    const paragraph = section.insertParagraph(0, "");
+    inlineImg = paragraph.insertInlineImage(0, blob);
+  }
+  
+  // 4. Set Alt-Text metadata
+  inlineImg.setAltTitle("DocKit_Meta");
+  inlineImg.setAltDescription(JSON.stringify(propertiesObj));
+  
+  console.log("Injected DocKit_Meta image into " + location);
+}
+
+/***************************************************************************************************
+ * Reads metadata from the 1x1 image's Alt-Text description.
+ * 
+ * @param {string} location - "HEADER", "FOOTER", "BODY", or "ALL".
+ * @returns {Object|null} The parsed metadata object, or a compiled object if "ALL".
+ **************************************************************************************************/
+function readMetadataFromImage(location) {
+  const doc = DocumentApp.getActiveDocument();
+  
+  if (location === "ALL") {
+    return {
+      HEADER: readMetadataFromImage("HEADER"),
+      BODY: readMetadataFromImage("BODY"),
+      FOOTER: readMetadataFromImage("FOOTER")
+    };
+  }
+  
+  let section;
+  if (location === "HEADER") section = doc.getHeader();
+  else if (location === "FOOTER") section = doc.getFooter();
+  else section = doc.getBody();
+  
+  if (!section) return null;
+  
+  const images = section.getImages();
+  for (let i = 0; i < images.length; i++) {
+    if (images[i].getAltTitle() === "DocKit_Meta") {
+      try {
+        const desc = images[i].getAltDescription();
+        return JSON.parse(desc);
+      } catch (e) {
+        console.log("Failed to parse JSON from DocKit_Meta image: " + e.message);
+        return null;
+      }
+    }
+  }
+  return null;
+}
