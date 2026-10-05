@@ -1,3 +1,8 @@
+// ==========================================
+// --- DocTemplate Library  --- (DocKit)
+// ==========================================
+const DOCKIT_VERSION = "V1.4.0"; // Deployed 10/4/2026 as Version 4
+
 /**************************************************************************************************
  * Library inserted in Apps Scripts as DocKit - has the following public functions:
  * 
@@ -23,9 +28,34 @@
  * processPlaceholder(placeholder, newContent) 
  *    - Legacy alias for processPlaceholderSpaceBoundaries.
  * 
- * Note: Functions ending in an underscore (e.g., generateZwsBoundaries_) are private internal helpers 
- * and are not exposed when this library is imported.
- **************************************************************************************************/
+ * --- METADATA IMAGE UTILITIES ---
+ * injectMetadataImage(propertiesObj)
+ *    - Injects a 1x1 transparent image with metadata in its Alt-Text description.
+ * readMetadataFromImage()
+ *    - Reads metadata strictly from the 1x1 image in the document Body.
+ * 
+ * --- CLIENT-SIDE SCRIPT INJECTION ---
+ * getChromeValidationScript()
+ *    - Returns a client-side JavaScript snippet that defines a global function `isChromeBrowser()`.
+ * 
+ * --- METADATA & VERSIONING ---
+ * getDocKitVersion()
+ *    - Retrieves the current version of the DocKit Library.
+ * 
+ * Note: Functions ending in an underscore (e.g., generateZwsBoundaries_) are private internal helpers
+ * 
+ *  **************************************************************************************************/
+
+/***************************************************************************************************
+ * Retrieves the current version of the DocKit Library.
+ * 
+ * @returns {string} The version string.
+ */
+
+function getDocKitVersion() {
+  console.log("DocKit: Serving library version: " + DOCKIT_VERSION);
+  return DOCKIT_VERSION;
+}
 
 /***************************************************************************************************
  * Retrieves the folder hierarchy for the given document based on the HHS Archiving structure.
@@ -558,27 +588,24 @@ function getPlaceholderFromBody(placeholder) {
 
 /***************************************************************************************************
  * Injects a 1x1 transparent image with metadata in its Alt-Text description.
+ * Actively cleans up any ghost images in all sections and forcefully injects into the BODY.
  * 
  * @param {Object} propertiesObj - The key-value pairs to store.
- * @param {string} location - "HEADER", "FOOTER", or "BODY".
  **************************************************************************************************/
-function injectMetadataImage(propertiesObj, location) {
+function injectMetadataImage(propertiesObj) {
   const doc = DocumentApp.getActiveDocument();
-  let section;
   
-  if (location === "HEADER") {
-    section = doc.getHeader() || doc.addHeader();
-  } else if (location === "FOOTER") {
-    section = doc.getFooter() || doc.addFooter();
-  } else {
-    section = doc.getBody();
-  }
-  
-  // 1. Clean up existing metadata images in this section
-  const images = section.getImages();
-  for (let i = 0; i < images.length; i++) {
-    if (images[i].getAltTitle() === "DocKit_Meta") {
-      images[i].removeFromParent();
+  // 1. Clean up existing metadata images EVERYWHERE (Limited to first 5 images per section for speed)
+  const sections = [doc.getBody(), doc.getHeader(), doc.getFooter()];
+  for (let s = 0; s < sections.length; s++) {
+    if (sections[s]) {
+      const images = sections[s].getImages();
+      const limit = Math.min(5, images.length);
+      for (let i = 0; i < limit; i++) {
+        if (images[i].getAltTitle() === "DocKit_Meta") {
+          images[i].removeFromParent();
+        }
+      }
     }
   }
   
@@ -586,15 +613,15 @@ function injectMetadataImage(propertiesObj, location) {
   const b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAAZdEVYdFNvZnR3YXJlAFBhaW50Lk5FVCB2My41LjbQg61aAAAADUlEQVQYV2P4//8/AwAI/AL+XvdLkQAAAABJRU5ErkJggg==";
   const blob = Utilities.newBlob(Utilities.base64Decode(b64), "image/png", "meta.png");
   
-  // 3. Inject at the very beginning of the first element to avoid adding extra blank lines
-  let firstChild = section.getNumChildren() > 0 ? section.getChild(0) : null;
+  // 3. Always inject at the very beginning of the BODY
+  const body = doc.getBody();
+  let firstChild = body.getNumChildren() > 0 ? body.getChild(0) : null;
   let inlineImg = null;
 
   if (firstChild && firstChild.getType() === DocumentApp.ElementType.PARAGRAPH) {
     inlineImg = firstChild.asParagraph().insertInlineImage(0, blob);
   } else {
-    // If the first child is a table or doesn't exist, insert a tiny paragraph
-    const paragraph = section.insertParagraph(0, "");
+    const paragraph = body.insertParagraph(0, "");
     inlineImg = paragraph.insertInlineImage(0, blob);
   }
   
@@ -602,35 +629,25 @@ function injectMetadataImage(propertiesObj, location) {
   inlineImg.setAltTitle("DocKit_Meta");
   inlineImg.setAltDescription(JSON.stringify(propertiesObj));
   
-  console.log("Injected DocKit_Meta image into " + location);
+  console.log("Injected DocKit_Meta image safely into BODY");
 }
 
 /***************************************************************************************************
- * Reads metadata from the 1x1 image's Alt-Text description.
+ * Reads metadata strictly from the 1x1 image in the document BODY.
+ * Limited to scanning the first 5 images to preserve maximum performance.
  * 
- * @param {string} location - "HEADER", "FOOTER", "BODY", or "ALL".
- * @returns {Object|null} The parsed metadata object, or a compiled object if "ALL".
+ * @returns {Object|null} The parsed metadata object.
  **************************************************************************************************/
-function readMetadataFromImage(location) {
+function readMetadataFromImage() {
   const doc = DocumentApp.getActiveDocument();
+  const body = doc.getBody();
   
-  if (location === "ALL") {
-    return {
-      HEADER: readMetadataFromImage("HEADER"),
-      BODY: readMetadataFromImage("BODY"),
-      FOOTER: readMetadataFromImage("FOOTER")
-    };
-  }
+  if (!body) return null;
   
-  let section;
-  if (location === "HEADER") section = doc.getHeader();
-  else if (location === "FOOTER") section = doc.getFooter();
-  else section = doc.getBody();
+  const images = body.getImages();
+  const limit = Math.min(5, images.length);
   
-  if (!section) return null;
-  
-  const images = section.getImages();
-  for (let i = 0; i < images.length; i++) {
+  for (let i = 0; i < limit; i++) {
     if (images[i].getAltTitle() === "DocKit_Meta") {
       try {
         const desc = images[i].getAltDescription();
@@ -642,4 +659,43 @@ function readMetadataFromImage(location) {
     }
   }
   return null;
+}
+
+/***************************************************************************************************
+ * Returns a client-side JavaScript snippet that defines a global function `isChromeBrowser()`.
+ * 
+ * USAGE INSTRUCTIONS:
+ * 1. In your server-side .gs file, ensure you load your HTML using `HtmlService.createTemplateFromFile()`
+ *    (do NOT use `createHtmlOutputFromFile`, as it cannot evaluate scriptlets).
+ * 2. In your HTML file, inject the script inside script tags:
+ *    <script>
+ *      <?!= DocKit.getChromeValidationScript() ?>
+ *    </script>
+ * 3. Call the function in your client-side JS: `var isChrome = isChromeBrowser();`
+ * 
+ * BROWSER SPOOFING WARNING:
+ * Modern versions of MS Edge actively mask their User-Agent strings to perfectly impersonate 
+ * Google Chrome. Because Edge is built on the same underlying Chromium engine as Chrome, 
+ * Workspace Add-ons generally function identically in both browsers. This validation intentionally 
+ * accepts Chromium-based spoofing, allowing Edge users to work seamlessly while successfully 
+ * blocking genuinely incompatible browsers like Firefox and Safari.
+ * 
+ * @returns {string} The client-side JavaScript code block.
+ **************************************************************************************************/
+function getChromeValidationScript() {
+  console.log("DocKit: Serving Chromium validation script to client.");
+  return `
+    function isChromeBrowser() {
+      var ua = navigator.userAgent || '';
+      var vendor = navigator.vendor || '';
+      
+      // Allow Chromium-based browsers (including Edge which spoofs Chrome)
+      var isChromium = /Chrome/i.test(ua) && /Google Inc/i.test(vendor);
+      
+      // Block known forks that have strict privacy shields which can break Apps Script (like Brave)
+      var isBrave = (typeof navigator.brave !== 'undefined');
+      
+      return isChromium && !isBrave;
+    }
+  `;
 }
