@@ -1,3 +1,8 @@
+// ==========================================
+// --- DocTemplate Library  --- (DocKit)
+// ==========================================
+const DOCKIT_VERSION = "V1.4.0"; // Deployed 10/4/2026 as Version 4
+
 /**************************************************************************************************
  * Library inserted in Apps Scripts as DocKit - has the following public functions:
  * 
@@ -23,9 +28,34 @@
  * processPlaceholder(placeholder, newContent) 
  *    - Legacy alias for processPlaceholderSpaceBoundaries.
  * 
- * Note: Functions ending in an underscore (e.g., generateZwsBoundaries_) are private internal helpers 
- * and are not exposed when this library is imported.
- **************************************************************************************************/
+ * --- METADATA IMAGE UTILITIES ---
+ * injectMetadataImage(propertiesObj)
+ *    - Injects a 1x1 transparent image with metadata in its Alt-Text description.
+ * readMetadataFromImage()
+ *    - Reads metadata strictly from the 1x1 image in the document Body.
+ * 
+ * --- CLIENT-SIDE SCRIPT INJECTION ---
+ * getChromeValidationScript()
+ *    - Returns a client-side JavaScript snippet that defines a global function `isChromeBrowser()`.
+ * 
+ * --- METADATA & VERSIONING ---
+ * getDocKitVersion()
+ *    - Retrieves the current version of the DocKit Library.
+ * 
+ * Note: Functions ending in an underscore (e.g., generateZwsBoundaries_) are private internal helpers
+ * 
+ *  **************************************************************************************************/
+
+/***************************************************************************************************
+ * Retrieves the current version of the DocKit Library.
+ * 
+ * @returns {string} The version string.
+ */
+
+function getDocKitVersion() {
+  console.log("DocKit: Serving library version: " + DOCKIT_VERSION);
+  return DOCKIT_VERSION;
+}
 
 /***************************************************************************************************
  * Retrieves the folder hierarchy for the given document based on the HHS Archiving structure.
@@ -629,4 +659,43 @@ function readMetadataFromImage() {
     }
   }
   return null;
+}
+
+/***************************************************************************************************
+ * Returns a client-side JavaScript snippet that defines a global function `isChromeBrowser()`.
+ * 
+ * USAGE INSTRUCTIONS:
+ * 1. In your server-side .gs file, ensure you load your HTML using `HtmlService.createTemplateFromFile()`
+ *    (do NOT use `createHtmlOutputFromFile`, as it cannot evaluate scriptlets).
+ * 2. In your HTML file, inject the script inside script tags:
+ *    <script>
+ *      <?!= DocKit.getChromeValidationScript() ?>
+ *    </script>
+ * 3. Call the function in your client-side JS: `var isChrome = isChromeBrowser();`
+ * 
+ * BROWSER SPOOFING WARNING:
+ * Modern versions of MS Edge actively mask their User-Agent strings to perfectly impersonate 
+ * Google Chrome. Because Edge is built on the same underlying Chromium engine as Chrome, 
+ * Workspace Add-ons generally function identically in both browsers. This validation intentionally 
+ * accepts Chromium-based spoofing, allowing Edge users to work seamlessly while successfully 
+ * blocking genuinely incompatible browsers like Firefox and Safari.
+ * 
+ * @returns {string} The client-side JavaScript code block.
+ **************************************************************************************************/
+function getChromeValidationScript() {
+  console.log("DocKit: Serving Chromium validation script to client.");
+  return `
+    function isChromeBrowser() {
+      var ua = navigator.userAgent || '';
+      var vendor = navigator.vendor || '';
+      
+      // Allow Chromium-based browsers (including Edge which spoofs Chrome)
+      var isChromium = /Chrome/i.test(ua) && /Google Inc/i.test(vendor);
+      
+      // Block known forks that have strict privacy shields which can break Apps Script (like Brave)
+      var isBrave = (typeof navigator.brave !== 'undefined');
+      
+      return isChromium && !isBrave;
+    }
+  `;
 }
