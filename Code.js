@@ -1,7 +1,8 @@
 // ==========================================
 // --- DocTemplate Library  --- (DocKit)
 // ==========================================
-const DOCKIT_VERSION = "V1.4.0"; // Deployed 10/4/2026 as Version 4
+// const DOCKIT_VERSION = "V1.4.0"; // Deployed 10/4/2026 as Version 4
+const DOCKIT_VERSION = "V1.5.01"; // Adding Share (Access) functions
 
 /**************************************************************************************************
  * Library inserted in Apps Scripts as DocKit - has the following public functions:
@@ -698,4 +699,132 @@ function getChromeValidationScript() {
       return isChromium && !isBrave;
     }
   `;
+}
+
+/***************************************************************************************************
+ * Generic Google Drive Permission Validator
+ * Checks an array of file IDs against a target set of rules.
+ * 
+ * @param {Array} fileIds - Array of Google Drive File IDs. If null/empty, defaults to active document.
+ * @param {Object} targetRules - Object mapping group names to expected roles (e.g., "Admins": "writer", "Public": "reader", "Members": "none").
+ * @param {Array} definedGroups - The GROUPS array from config, mapping NAMES to GROUP_EMAILs.
+ * @returns {number} 1 (Match), 2 (Match + Additional), 3 (Mismatch), 4 (Mismatch + Additional)
+ **************************************************************************************************/
+function checkSharingRules(fileIds, targetRules, definedGroups) {
+  if (!fileIds || fileIds.length === 0) {
+    const doc = DocumentApp.getActiveDocument();
+    if (!doc) return 1;
+    fileIds = [doc.getId()];
+  }
+
+  let worstCase = 1;
+
+  for (let i = 0; i !== fileIds.length; i++) {
+    const fileId = fileIds[i];
+    let hasMismatch = false;
+    let hasAdditional = false;
+
+    try {
+      // 1. Fetch live permissions using Advanced Drive Service
+      const response = Drive.Permissions.list(fileId, {
+        fields: 'permissions(id, type, emailAddress, role)',
+        supportsAllDrives: true
+      });
+      const currentPerms = response.permissions || [];
+      
+      // 2. Map target rules to Google Drive API identifiers
+      const expectedPerms = {};
+      const ruleKeys = Object.keys(targetRules);
+      
+      for (let k = 0; k !== ruleKeys.length; k++) {
+        const groupName = ruleKeys[k];
+        const expectedRole = targetRules[groupName];
+        let identifier = "";
+        
+        if (groupName === "Public") {
+          identifier = "anyone";
+        } else if (groupName === "Domain") {
+          identifier = "domain";
+        } else {
+          // Find the email mapped to this group name
+          const matchedGroup = definedGroups.find(function(g) { return g.NAME === groupName; });
+          if (matchedGroup && matchedGroup.GROUP_EMAIL) {
+            identifier = matchedGroup.GROUP_EMAIL.toLowerCase();
+          }
+        }
+        
+        if (identifier !== "") {
+          expectedPerms[identifier] = expectedRole;
+        }
+      }
+
+      // 3. Evaluate live permissions vs. expected rules
+      const matchedIdentifiers = [];
+      
+      for (let p = 0; p !== currentPerms.length; p++) {
+        const perm = currentPerms[p];
+        if (perm.role === 'owner') continue; // Always ignore the file owner
+        
+        let permIdentifier = "";
+        if (perm.type === 'anyone') {
+          permIdentifier = "anyone";
+        } else if (perm.type === 'domain') {
+          permIdentifier = "domain";
+        } else if (perm.emailAddress) {
+          permIdentifier = perm.emailAddress.toLowerCase();
+        }
+
+        matchedIdentifiers.push(permIdentifier);
+
+        if (expectedPerms[permIdentifier]) {
+           const expected = expectedPerms[permIdentifier];
+           if (expected === "none") {
+             hasMismatch = true; // Expected it to be hidden, but it has access
+           } else if (expected !== perm.role) {
+             hasMismatch = true; // Has access, but wrong role level
+           }
+        } else {
+           // Found a live permission that is NOT in our target rules
+           hasAdditional = true;
+        }
+      }
+
+      // 4. Ensure no expected permissions are completely missing
+      const expKeys = Object.keys(expectedPerms);
+      for (let e = 0; e !== expKeys.length; e++) {
+        const expId = expKeys[e];
+        const reqRole = expectedPerms[expId];
+        
+        // If we expected writer/reader, but it wasn't found at all
+        if (reqRole !== "none" && matchedIdentifiers.indexOf(expId) === -1) {
+          hasMismatch = true; 
+        }
+      }
+
+      // 5. Determine the status code for this specific file
+      let fileCase = 1;
+      if (hasMismatch && hasAdditional) {
+        fileCase = 4;
+      } else if (hasMismatch) {
+        fileCase = 3;
+      } else if (hasAdditional) {
+        fileCase = 2;
+      }
+      
+      console.log("DocKit Permission Check [" + fileId + "]: Returned Case " + fileCase);
+
+      // Keep the worst-case scenario across all checked files
+      if (fileCase > worstCase) {
+        worstCase = fileCase;
+      }
+
+    } catch (err) {
+      console.warn("DocKit: Error checking permissions for " + fileId + ": " + err.message);
+      // If we fail to read a file, assume mismatch (3) as a safety precaution unless we are already at 4
+      if (worstCase !== 4) worstCase = 3; 
+    }
+  }
+
+  console.log("DocKit Permission Check Final Result: Case " + worstCase);
+  return worstCase;
 }
