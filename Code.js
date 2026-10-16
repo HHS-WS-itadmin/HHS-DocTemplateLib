@@ -2,7 +2,7 @@
 // --- DocTemplate Library  --- (DocKit)
 // ==========================================
 // const DOCKIT_VERSION = "V1.4.0"; // Deployed 10/4/2026 as Version 4
-const DOCKIT_VERSION = "V1.5.01"; // Adding Share (Access) functions
+const DOCKIT_VERSION = "V1.5.01"; // Adding Share (Access) functions --- Deployed 2026-10-16 @ 11:54 AM
 
 /**************************************************************************************************
  * Library inserted in Apps Scripts as DocKit - has the following public functions:
@@ -43,6 +43,12 @@ const DOCKIT_VERSION = "V1.5.01"; // Adding Share (Access) functions
  * getDocKitVersion()
  *    - Retrieves the current version of the DocKit Library.
  * 
+ * --- SHARING & PERMISSIONS ---
+ * checkSharingRules(fileIds, targetRules, definedGroups, ignoredEmails)
+ *    - Evaluates files against a target set of rules, returning a status code and list of violators.
+ * applySharingRules(fileIds, targetRules, definedGroups, keepExtras, ignoredEmails)
+ *    - Enforces rules by updating, adding, or removing user/group access automatically.
+ *
  * Note: Functions ending in an underscore (e.g., generateZwsBoundaries_) are private internal helpers
  * 
  *  **************************************************************************************************/
@@ -710,7 +716,8 @@ function getChromeValidationScript() {
  * @param {Array} definedGroups - The GROUPS array from config, mapping NAMES to GROUP_EMAILs.
  * @returns {number} 1 (Match), 2 (Match + Additional), 3 (Mismatch), 4 (Mismatch + Additional)
  **************************************************************************************************/
-function checkSharingRules(fileIds, targetRules, definedGroups) {
+function checkSharingRules(fileIds, targetRules, definedGroups, ignoredEmails) {
+  const ignored = ignoredEmails || [];
   if (!fileIds || fileIds.length === 0) {
     const doc = DocumentApp.getActiveDocument();
     if (!doc) return 1;
@@ -718,6 +725,7 @@ function checkSharingRules(fileIds, targetRules, definedGroups) {
   }
 
   let worstCase = 1;
+  let allViolators = []; // Array to track inherited violators
 
   for (let i = 0; i !== fileIds.length; i++) {
     const fileId = fileIds[i];
@@ -727,7 +735,7 @@ function checkSharingRules(fileIds, targetRules, definedGroups) {
     try {
       // 1. Fetch live permissions using Advanced Drive Service
       const response = Drive.Permissions.list(fileId, {
-        fields: 'permissions(id, type, emailAddress, role)',
+        fields: 'permissions(id, type, emailAddress, role, permissionDetails)',
         supportsAllDrives: true
       });
       const currentPerms = response.permissions || [];
@@ -736,9 +744,15 @@ function checkSharingRules(fileIds, targetRules, definedGroups) {
       const expectedPerms = {};
       const ruleKeys = Object.keys(targetRules);
       
-      for (let k = 0; k !== ruleKeys.length; k++) {
+      for (let k = 0; k < ruleKeys.length; k++) {
         const groupName = ruleKeys[k];
-        const expectedRole = targetRules[groupName];
+        let expectedRole = targetRules[groupName];
+        
+        // Map folder-level roles to file-level equivalents to prevent Drive API errors
+        if (expectedRole === "fileOrganizer" || expectedRole === "organizer") {
+          expectedRole = "writer";
+        }
+        
         let identifier = "";
         
         if (groupName === "Public") {
@@ -761,9 +775,20 @@ function checkSharingRules(fileIds, targetRules, definedGroups) {
       // 3. Evaluate live permissions vs. expected rules
       const matchedIdentifiers = [];
       
-      for (let p = 0; p !== currentPerms.length; p++) {
+      for (let p = 0; p < currentPerms.length; p++) {
         const perm = currentPerms[p];
         if (perm.role === 'owner') continue; // Always ignore the file owner
+        
+        // Check if this permission is inherited from a parent folder or Shared Drive
+        let isInherited = false;
+        if (perm.permissionDetails) {
+          for (let d = 0; d < perm.permissionDetails.length; d++) {
+            if (perm.permissionDetails[d].inherited) {
+              isInherited = true;
+              break;
+            }
+          }
+        }
         
         let permIdentifier = "";
         if (perm.type === 'anyone') {
@@ -774,36 +799,78 @@ function checkSharingRules(fileIds, targetRules, definedGroups) {
           permIdentifier = perm.emailAddress.toLowerCase();
         }
 
+        if (ignored.indexOf(permIdentifier) !== -1) {
+          console.log("DocKit Check: Skipping ignored email " + permIdentifier);
+          continue; // Completely skip this user
+        }
+
         matchedIdentifiers.push(permIdentifier);
+        
+        // Initialize the new violation flag at the top of the file loop
+        if (typeof hasInheritedViolation === 'undefined') { var hasInheritedViolation = false; }
 
         if (expectedPerms[permIdentifier]) {
            const expected = expectedPerms[permIdentifier];
+           
+           // Normalize the live role from the API to match our file-level logic
+           let normalizedLiveRole = perm.role;
+           if (normalizedLiveRole === "fileOrganizer" || normalizedLiveRole === "organizer") {
+             normalizedLiveRole = "writer";
+           }
+           
            if (expected === "none") {
-             hasMismatch = true; // Expected it to be hidden, but it has access
-           } else if (expected !== perm.role) {
-             hasMismatch = true; // Has access, but wrong role level
+             if (isInherited) {
+               console.log("DocKit Check: Inherited violation for " + permIdentifier + " (Expected none)");
+               hasInheritedViolation = true;
+               allViolators.push(permIdentifier + " (Inherited, expected none)");
+             } else {
+               hasMismatch = true; 
+               allViolators.push(permIdentifier + " (Has access, expected none)");
+             }
+           } else if (expected !== normalizedLiveRole) {
+             if (isInherited && normalizedLiveRole === "writer") {
+                console.log("DocKit Check: Inherited violation for " + permIdentifier + " (Cannot downgrade)");
+                hasInheritedViolation = true;
+                allViolators.push(permIdentifier + " (Inherited " + perm.role + ", expected " + expected + ")");
+             } else {
+                hasMismatch = true; 
+                allViolators.push(permIdentifier + " (Has " + perm.role + ", expected " + expected + ")");
+             }
            }
         } else {
            // Found a live permission that is NOT in our target rules
-           hasAdditional = true;
+           // Implicitly, this means they should not have access.
+           if (isInherited) {
+             console.log("DocKit Check: Inherited violation for unexpected entity: " + permIdentifier);
+             hasInheritedViolation = true; 
+             allViolators.push(permIdentifier + " (Inherited unexpected access)");
+           } else {
+             hasAdditional = true;
+             allViolators.push(permIdentifier + " (Unexpected extra access)");
+           }
         }
       }
 
       // 4. Ensure no expected permissions are completely missing
       const expKeys = Object.keys(expectedPerms);
-      for (let e = 0; e !== expKeys.length; e++) {
+      for (let e = 0; e < expKeys.length; e++) {
         const expId = expKeys[e];
         const reqRole = expectedPerms[expId];
         
         // If we expected writer/reader, but it wasn't found at all
         if (reqRole !== "none" && matchedIdentifiers.indexOf(expId) === -1) {
           hasMismatch = true; 
+          allViolators.push(expId + " (Missing " + reqRole + " access)");
         }
       }
 
       // 5. Determine the status code for this specific file
       let fileCase = 1;
-      if (hasMismatch && hasAdditional) {
+      if (hasInheritedViolation && (hasMismatch || hasAdditional)) {
+        fileCase = 6; // Inherited violation PLUS fixable mismatches
+      } else if (hasInheritedViolation) {
+        fileCase = 5; // ONLY inherited violations
+      } else if (hasMismatch && hasAdditional) {
         fileCase = 4;
       } else if (hasMismatch) {
         fileCase = 3;
@@ -826,5 +893,192 @@ function checkSharingRules(fileIds, targetRules, definedGroups) {
   }
 
   console.log("DocKit Permission Check Final Result: Case " + worstCase);
-  return worstCase;
+      return {
+        caseCode: worstCase,
+        violators: Array.from(new Set(allViolators)) // Return array with duplicates removed
+      };
+}
+/***************************************************************************************************
+ * Applies Google Drive Permission Rules.
+ * 
+ * @param {Array} fileIds - Array of Google Drive File IDs. If null/empty, defaults to active document.
+ * @param {Object} targetRules - Object mapping group names to expected roles (e.g., "Admins": "writer", "Public": "reader").
+ * @param {Array} definedGroups - The GROUPS array mapping NAMES to GROUP_EMAILs.
+ * @param {boolean} keepExtras - If false, removes any unknown users/groups. If true, leaves them alone.
+ * @returns {boolean} true on success.
+ **************************************************************************************************/
+function applySharingRules(fileIds, targetRules, definedGroups, keepExtras, ignoredEmails) {
+  const ignored = ignoredEmails || [];
+  if (!fileIds || fileIds.length === 0) {
+    const doc = DocumentApp.getActiveDocument();
+    if (!doc) return false;
+    fileIds = [doc.getId()];
+  }
+
+  // 1. Map target rules to Google Drive API identifiers
+  const expectedPerms = {};
+  const ruleKeys = Object.keys(targetRules);
+  
+  for (let k = 0; k < ruleKeys.length; k++) {
+    const groupName = ruleKeys[k];
+    let expectedRole = targetRules[groupName];
+    
+    // Map folder-level roles to file-level equivalents to prevent Drive API errors
+    if (expectedRole === "fileOrganizer" || expectedRole === "organizer") {
+      expectedRole = "writer";
+    }
+    
+    let identifier = "";
+    let permType = "user";
+    
+    if (groupName === "Public") {
+      identifier = "anyone";
+      permType = "anyone";
+    } else if (groupName === "Domain") {
+      identifier = "domain";
+      permType = "domain";
+    } else {
+      const matchedGroup = definedGroups.find(function(g) { return g.NAME === groupName; });
+      if (matchedGroup && matchedGroup.GROUP_EMAIL) {
+        identifier = matchedGroup.GROUP_EMAIL.toLowerCase();
+        permType = "group"; 
+      }
+    }
+    
+    if (identifier !== "") {
+      expectedPerms[identifier] = { role: expectedRole, type: permType };
+    }
+  }
+
+  // 2. Process each file
+  for (let i = 0; i < fileIds.length; i++) {
+    const fileId = fileIds[i];
+    
+    try {
+      // Fetch live permissions
+      const response = Drive.Permissions.list(fileId, {
+        fields: 'permissions(id, type, emailAddress, role, permissionDetails)',
+        supportsAllDrives: true
+      });
+      const currentPerms = response.permissions || [];
+      
+      // Map live permissions by identifier
+      const livePermsMap = {};
+      for (let p = 0; p < currentPerms.length; p++) {
+        const perm = currentPerms[p];
+        if (perm.role === 'owner') continue; // Never touch the owner
+        
+        // Identify if it is inherited
+        let isInherited = false;
+        if (perm.permissionDetails) {
+          for (let d = 0; d < perm.permissionDetails.length; d++) {
+            if (perm.permissionDetails[d].inherited) {
+              isInherited = true;
+              break;
+            }
+          }
+        }
+             
+        // Store the inherited status on the permission object for easy access later
+        perm.isInherited = isInherited;
+
+        // Log the raw permission for debugging in case Google changes their API format
+        console.log("DocKit Evaluating: Type=" + perm.type + ", Role=" + perm.role + ", ID=" + perm.id);
+        
+        let permIdentifier = "";
+        if (perm.type === 'anyone' || perm.id === 'anyoneWithLink') {
+          permIdentifier = "anyone";
+        } else if (perm.type === 'domain' || perm.domain) {
+          permIdentifier = "domain";
+        } else if (perm.emailAddress) {
+          permIdentifier = perm.emailAddress.toLowerCase();
+        } else {
+          permIdentifier = "unknown-entity-" + perm.id;
+        }
+        
+        if (ignored.indexOf(permIdentifier) !== -1) {
+          console.log("DocKit Apply: Skipping ignored entity " + permIdentifier);
+          continue; // Completely skip this user
+        }
+
+        if (permIdentifier) {
+          livePermsMap[permIdentifier] = perm;
+        }
+      }
+      
+      // 3. Apply expected rules (Update, Insert, or Remove expected 'none')
+      const expKeys = Object.keys(expectedPerms);
+      for (let e = 0; e < expKeys.length; e++) {
+        const expId = expKeys[e];
+        const target = expectedPerms[expId];
+        const livePerm = livePermsMap[expId];
+        
+        if (target.role === "none") {
+          // Rule says 'none'. If it exists AND is not inherited, remove it.
+          if (livePerm && !livePerm.isInherited) {
+            console.log("DocKit: Removing permission for " + expId + " on file " + fileId);
+            Drive.Permissions.remove(fileId, livePerm.id, {supportsAllDrives: true});
+          } else if (livePerm && livePerm.isInherited) {
+            console.log("DocKit: Skipping removal for " + expId + " because permission is inherited.");
+          }
+        } else {
+          // Rule says 'reader' or 'writer'
+          if (livePerm) {
+            // Normalize live role to match our file-level target role
+            let normalizedLiveRole = livePerm.role;
+            if (normalizedLiveRole === "fileOrganizer" || normalizedLiveRole === "organizer") {
+              normalizedLiveRole = "writer";
+            }
+            
+            // It exists, check if role needs updating
+            if (normalizedLiveRole !== target.role) {
+              // If it's inherited, we can't downgrade it. We can only upgrade by creating a direct permission.
+              if (livePerm.isInherited && normalizedLiveRole === "writer") {
+                console.log("DocKit: Cannot downgrade inherited permission for " + expId);
+              } else {
+                console.log("DocKit: Updating permission for " + expId + " to " + target.role + " on file " + fileId);
+                Drive.Permissions.update({role: target.role}, fileId, livePerm.id, {supportsAllDrives: true});
+              }
+            }
+          } else {
+            // It doesn't exist, create it
+            console.log("DocKit: Creating permission for " + expId + " as " + target.role + " on file " + fileId);
+            const newResource = { role: target.role, type: target.type };
+            const options = { supportsAllDrives: true };
+            
+            if (target.type === "group" || target.type === "user") {
+              newResource.emailAddress = expId;
+              options.sendNotificationEmail = false; // This parameter is strictly forbidden for 'anyone' or 'domain' types
+            }
+            
+            Drive.Permissions.create(newResource, fileId, options);
+          }
+        }
+      }
+      
+      // 4. Clean up unexpected extras (if keepExtras is false)
+      if (!keepExtras) {
+        const liveKeys = Object.keys(livePermsMap);
+        for (let l = 0; l < liveKeys.length; l++) {
+          const liveId = liveKeys[l];
+          if (!expectedPerms[liveId]) {
+            const extraPerm = livePermsMap[liveId];
+            if (!extraPerm.isInherited) {
+              console.log("DocKit: Removing unexpected extra permission for " + liveId + " on file " + fileId);
+              Drive.Permissions.remove(fileId, extraPerm.id, {supportsAllDrives: true});
+            } else {
+              console.log("DocKit: Skipping removal of unexpected extra " + liveId + " because it is inherited.");
+            }
+          }
+        }
+      }
+      
+    } catch (err) {
+      console.warn("DocKit: Error applying permissions to " + fileId + ": " + err.message);
+      throw new Error("Failed to auto-fix Google Drive sharing permissions. Check the execution logs.");
+    }
+  }
+  
+  console.log("DocKit: Permission rules successfully applied.");
+  return true;
 }
