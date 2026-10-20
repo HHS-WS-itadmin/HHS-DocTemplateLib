@@ -2,7 +2,8 @@
 // --- DocTemplate Library  --- (DocKit)
 // ==========================================
 // const DOCKIT_VERSION = "V1.4.0"; // Deployed 10/4/2026 as Version 4
-const DOCKIT_VERSION = "V1.5.01"; // Adding Share (Access) functions --- Deployed 2026-10-16 @ 11:54 AM
+// const DOCKIT_VERSION = "V1.5.01"; // Adding Share (Access) functions --- Deployed 2026-10-16 @ 11:54 AM
+const DOCKIT_VERSION = "V1.6.01"; // Adding functions for Collection sync app
 
 /**************************************************************************************************
  * Library inserted in Apps Scripts as DocKit - has the following public functions:
@@ -1081,4 +1082,106 @@ function applySharingRules(fileIds, targetRules, definedGroups, keepExtras, igno
   
   console.log("DocKit: Permission rules successfully applied.");
   return true;
+}
+
+/**
+ * Generic utility to fetch and cache dropdown choices from any Google Drive Label field.
+ * Uses ScriptCache to store the schema for 6 hours, eliminating redundant API calls.
+ * 
+ * @param {string} labelId - The ID of the Drive Label (e.g., "y6pL8F6G...")
+ * @param {string} fieldId - The specific Field ID within the label (e.g., "BEA57AE06E")
+ * @param {string} cacheKey - A unique string to name the cache (e.g., "STATUS_CHOICES")
+ * @returns {Array} Array of objects containing title and value { title: "Published", value: "FDE4D7F74B" }
+ */
+function getDriveLabelChoices(labelId, fieldId, cacheKey) {
+  const cache = CacheService.getScriptCache();
+  const cachedChoices = cache.get(cacheKey);
+  
+  if (cachedChoices) {
+    return JSON.parse(cachedChoices);
+  }
+
+  try {
+    // Ensure the required prefix is present for the advanced service
+    if (!labelId.startsWith('labels/')) {
+      labelId = 'labels/' + labelId;
+    }
+    
+    // Fetch the full schema
+    const label = DriveLabels.Labels.get(labelId, { view: "LABEL_VIEW_FULL" });
+    const field = label.fields.find(function(f) { return f.id === fieldId; });
+    
+    if (!field || !field.selectionOptions || !field.selectionOptions.choices) {
+      throw new Error("Field ID " + fieldId + " not found or has no dropdown choices.");
+    }
+    
+    // Map into a clean array and sort alphabetically
+    const choices = field.selectionOptions.choices.map(function(choice) {
+      return {
+        title: choice.properties.displayName,
+        value: choice.id 
+      };
+    }).sort(function(a, b) { return a.title.localeCompare(b.title); });
+    
+    // Cache for 6 hours (21600 seconds)
+    cache.put(cacheKey, JSON.stringify(choices), 21600);
+    return choices;
+  } catch (e) {
+    console.error("DocKit: Error in getDriveLabelChoices for " + cacheKey + ": " + e.message);
+    throw new Error("Failed to fetch label choices: " + e.message);
+  }
+}
+
+/**
+ * Generic utility to fetch applied Workspace Labels for a specific Google Drive file.
+ * 
+ * @param {string} fileId - The Google Drive File ID.
+ * @param {string} labelId - The exact Label ID to fetch (e.g., from CONFIG.LABELS.RECORD_STATUS.LABEL_ID).
+ * @returns {Object|null} A dictionary of field IDs and their applied values/arrays, or null if the label is not applied.
+ */
+function getDriveFileLabels(fileId, labelId) {
+  try {
+    // Strip the 'labels/' prefix if present, as includeLabels expects raw IDs
+    const rawLabelId = labelId.replace('labels/', '').split('@')[0];
+    
+    const fileMetadata = Drive.Files.get(fileId, {
+      fields: "labelInfo",
+      includeLabels: rawLabelId,
+      supportsAllDrives: true
+    });
+
+    if (!fileMetadata.labelInfo || !fileMetadata.labelInfo.labels) {
+      return null; // No labels applied
+    }
+
+    const appliedLabel = fileMetadata.labelInfo.labels.find(function(l) { 
+      return l.id === rawLabelId || (l.id && l.id.includes(rawLabelId)); 
+    });
+
+    if (!appliedLabel || !appliedLabel.fields) {
+      return null; // Specific label not found
+    }
+
+    // Convert the complex API response into a simple FieldID -> Value mapping
+    const simplifiedFields = {};
+    for (const fieldId in appliedLabel.fields) {
+      const fieldData = appliedLabel.fields[fieldId];
+      if (fieldData.selection && fieldData.selection.length > 0) {
+        // Selection fields (dropdowns)
+        let choice = fieldData.selection[0];
+        simplifiedFields[fieldId] = typeof choice === 'object' ? (choice.id || choice.value) : choice;
+      } else if (fieldData.text) {
+        simplifiedFields[fieldId] = fieldData.text.join("\n");
+      } else if (fieldData.dateString) {
+        simplifiedFields[fieldId] = fieldData.dateString[0];
+      } else if (fieldData.user) {
+        simplifiedFields[fieldId] = fieldData.user[0].emailAddress;
+      }
+    }
+
+    return simplifiedFields;
+  } catch (e) {
+    console.warn("DocKit: Error fetching labels for file " + fileId + ": " + e.message);
+    return null;
+  }
 }
