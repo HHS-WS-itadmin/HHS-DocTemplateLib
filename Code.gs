@@ -4,7 +4,8 @@
 // const DOCKIT_VERSION = "V1.4.0"; // Deployed 10/4/2026 as Version 4
 // const DOCKIT_VERSION = "V1.5.01"; // Adding Share (Access) functions --- Deployed 2026-10-16 @ 11:54 AM
 // const DOCKIT_VERSION = "V1.6.01"; // Adding functions for Collection sync app
-const DOCKIT_VERSION = "V1.6.02"; // Adding getExpandedIgnoredEmails
+// const DOCKIT_VERSION = "V1.6.02"; // Adding getExpandedIgnoredEmails
+const DOCKIT_VERSION = "V1.6.20"; // Added tree structure vizualization
 
 /**************************************************************************************************
  * Library inserted in Apps Scripts as DocKit - has the following public functions:
@@ -1232,4 +1233,61 @@ function getExpandedIgnoredEmails(baseIgnoredEmails, ignoredGroupEmails) {
   // Combine and deduplicate
   const combined = baseList.map(function(e) { return e.toLowerCase(); }).concat(expandedEmails);
   return Array.from(new Set(combined));
+}
+
+/***************************************************************************************************
+ * Generates a formatted ASCII plaintext tree from a flat array of file/folder objects.
+ * 
+ * @param {string} rootTitle - The title to display at the very top of the tree.
+ * @param {Array} items - Array of objects: { id, parentId, name, isFolder (boolean), suffix (optional string) }
+ * @param {string} rootId - The ID of the root node where the tracing should begin.
+ * @returns {string} The formatted ASCII text.
+ **************************************************************************************************/
+function buildAsciiTree(rootTitle, items, rootId) {
+  const childrenMap = {};
+  
+  // 1. Build an adjacency map of parentId -> children array
+  items.forEach(function(item) {
+    const pid = item.parentId || 'ORPHAN';
+    if (!childrenMap[pid]) childrenMap[pid] = [];
+    childrenMap[pid].push(item);
+  });
+
+  // 2. Sort children: Folders first, then alphabetically by name
+  for (const pid in childrenMap) {
+    childrenMap[pid].sort(function(a, b) {
+      if (a.isFolder && !b.isFolder) return -1;
+      if (!a.isFolder && b.isFolder) return 1;
+      return a.name.localeCompare(b.name);
+    });
+  }
+
+  let treeText = rootTitle + "\n";
+
+  // 3. Recursive formatter
+  function traverse(nodeId, prefix) {
+    const children = childrenMap[nodeId] || [];
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
+      const isLast = (i === children.length - 1);
+      const connector = isLast ? "└── " : "├── ";
+      
+      // Select icon (Folders vs Shortcuts/Files)
+      let icon = child.isFolder ? "📁 " : "📄 ";
+      if (child.mimeType === 'application/vnd.google-apps.shortcut') icon = "🔗 ";
+      
+      const suffix = child.suffix ? child.suffix : "";
+
+      treeText += prefix + connector + icon + child.name + suffix + "\n";
+
+      // If it's a folder, traverse its children, increasing the indentation prefix
+      if (child.isFolder) {
+        const nextPrefix = prefix + (isLast ? "    " : "│   ");
+        traverse(child.id, nextPrefix);
+      }
+    }
+  }
+
+  traverse(rootId, "");
+  return treeText;
 }
