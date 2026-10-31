@@ -1288,6 +1288,8 @@ function buildAsciiTree(rootTitle, items, rootId) {
     }
   }
 
+  
+
   traverse(rootId, "");
   return treeText;
 }
