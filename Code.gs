@@ -5,7 +5,8 @@
 // const DOCKIT_VERSION = "V1.5.01"; // Adding Share (Access) functions --- Deployed 2026-10-16 @ 11:54 AM
 // const DOCKIT_VERSION = "V1.6.01"; // Adding functions for Collection sync app
 // const DOCKIT_VERSION = "V1.6.02"; // Adding getExpandedIgnoredEmails
-const DOCKIT_VERSION = "V1.6.21"; // Added tree structure vizualization
+// const DOCKIT_VERSION = "V1.6.21"; // Added tree structure vizualization
+const DOCKIT_VERSION = "V1.6.30"; // Start Sync UPDATE (DELTA)
 
 /**************************************************************************************************
  * Library inserted in Apps Scripts as DocKit - has the following public functions:
@@ -1277,8 +1278,13 @@ function buildAsciiTree(rootTitle, items, rootId) {
       if (child.mimeType === 'application/vnd.google-apps.shortcut') icon = "🔗 ";
       
       const suffix = child.suffix ? child.suffix : "";
+      
+      let displayName = child.name;
+      if (displayName.length > 50) {
+        displayName = displayName.substring(0, 47) + "...";
+      }
 
-      treeText += prefix + connector + icon + child.name + suffix + "\n";
+      treeText += prefix + connector + icon + displayName + suffix + "\n";
 
       // If it's a folder, traverse its children, increasing the indentation prefix
       if (child.isFolder) {
