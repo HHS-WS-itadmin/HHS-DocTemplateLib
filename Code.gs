@@ -6,7 +6,7 @@
 // const DOCKIT_VERSION = "V1.6.01"; // Adding functions for Collection sync app
 // const DOCKIT_VERSION = "V1.6.02"; // Adding getExpandedIgnoredEmails
 // const DOCKIT_VERSION = "V1.6.21"; // Added tree structure vizualization
-const DOCKIT_VERSION = "V1.6.30"; // Start Sync UPDATE (DELTA)
+const DOCKIT_VERSION = "V1.6.30b"; // Start Sync UPDATE (DELTA)
 
 /**************************************************************************************************
  * Library inserted in Apps Scripts as DocKit - has the following public functions:
