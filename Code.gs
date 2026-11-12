@@ -8,7 +8,8 @@
 // const DOCKIT_VERSION = "V1.6.21"; // Added tree structure vizualization
 // const DOCKIT_VERSION = "V1.6.30b"; // Start Sync UPDATE (DELTA)
 // const DOCKIT_VERSION = "V1.6.40"; // Fix issue with IGNORED_GROUP_MEMBERS
-const DOCKIT_VERSION = "V1.7.00d"; // DEPLOYED V7
+// const DOCKIT_VERSION = "V1.7.00d"; // DEPLOYED V7
+const DOCKIT_VERSION = "V1.8.00d"; // Fixing cache issues - Deployed V8
 
 /**************************************************************************************************
  * Library inserted in Apps Scripts as DocKit - has the following public functions:
@@ -1214,8 +1215,11 @@ function getExpandedIgnoredEmails(baseIgnoredEmails, ignoredGroupEmails) {
   let expandedEmails = [];
   if (cachedData) {
     expandedEmails = JSON.parse(cachedData);
+    console.log("DocKit: Loaded " + expandedEmails.length + " ignored group email(s) from cache.");
   } else {
     console.log("DocKit: Expanding ignored groups via Admin Directory API...");
+    let hadApiSuccess = false;
+
     for (let i = 0; i < groupList.length; i++) {
       const groupEmail = groupList[i].toLowerCase();
       try {
@@ -1236,18 +1240,40 @@ function getExpandedIgnoredEmails(baseIgnoredEmails, ignoredGroupEmails) {
           }
           pageToken = response.nextPageToken;
         } while (pageToken);
+        hadApiSuccess = true;
         console.log("DocKit: Successfully expanded " + expandedEmails.length + " member(s) from " + groupEmail);
       } catch (e) {
         console.warn("DocKit: Could not expand group " + groupEmail + " via Directory API. Error: " + e.message);
       }
     }
-    // Cache for 1 hour (3600 seconds) to limit API usage
-    cache.put(cacheKey, JSON.stringify(expandedEmails), 3600);
+
+    // Only cache if at least one group lookup succeeded so non-admin 403 errors never poison the cache
+    if (hadApiSuccess) {
+      cache.put(cacheKey, JSON.stringify(expandedEmails), 3600);
+      console.log("DocKit: Cached " + expandedEmails.length + " expanded group email(s) for 1 hour.");
+    } else {
+      console.warn("DocKit: Skipping cache write because group expansion did not succeed.");
+    }
   }
 
   // Combine and deduplicate
   const combined = baseList.map(function(e) { return e.toLowerCase(); }).concat(expandedEmails);
   return Array.from(new Set(combined));
+}
+
+/***************************************************************************************************
+ * Clears the cached ignored group members so the next permission check fetches fresh data.
+ * 
+ * @param {Array} ignoredGroupEmails - Array of group email strings matching the cache key.
+ **************************************************************************************************/
+function clearIgnoredGroupsCache(ignoredGroupEmails) {
+  const groupList = ignoredGroupEmails || [];
+  if (groupList.length === 0) return;
+
+  const cache = CacheService.getScriptCache();
+  const cacheKey = "IGNORED_GROUPS_" + groupList.join("_").replace(/[^a-zA-Z0-9]/g, '');
+  cache.remove(cacheKey);
+  console.log("DocKit: Removed cache key " + cacheKey);
 }
 
 /***************************************************************************************************
