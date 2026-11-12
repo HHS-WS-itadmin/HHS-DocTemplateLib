@@ -7,7 +7,8 @@
 // const DOCKIT_VERSION = "V1.6.02"; // Adding getExpandedIgnoredEmails
 // const DOCKIT_VERSION = "V1.6.21"; // Added tree structure vizualization
 // const DOCKIT_VERSION = "V1.6.30b"; // Start Sync UPDATE (DELTA)
-const DOCKIT_VERSION = "V1.6.40"; // Fix issue with IGNORED_GROUP_MEMBERS
+// const DOCKIT_VERSION = "V1.6.40"; // Fix issue with IGNORED_GROUP_MEMBERS
+const DOCKIT_VERSION = "V1.7.00d"; // DEPLOYED V7
 
 /**************************************************************************************************
  * Library inserted in Apps Scripts as DocKit - has the following public functions:
