@@ -6,7 +6,8 @@
 // const DOCKIT_VERSION = "V1.6.01"; // Adding functions for Collection sync app
 // const DOCKIT_VERSION = "V1.6.02"; // Adding getExpandedIgnoredEmails
 // const DOCKIT_VERSION = "V1.6.21"; // Added tree structure vizualization
-const DOCKIT_VERSION = "V1.6.30b"; // Start Sync UPDATE (DELTA)
+// const DOCKIT_VERSION = "V1.6.30b"; // Start Sync UPDATE (DELTA)
+const DOCKIT_VERSION = "V1.6.40"; // Fix issue with IGNORED_GROUP_MEMBERS
 
 /**************************************************************************************************
  * Library inserted in Apps Scripts as DocKit - has the following public functions:
@@ -1213,18 +1214,30 @@ function getExpandedIgnoredEmails(baseIgnoredEmails, ignoredGroupEmails) {
   if (cachedData) {
     expandedEmails = JSON.parse(cachedData);
   } else {
-    console.log("DocKit: Expanding ignored groups via GroupsApp...");
+    console.log("DocKit: Expanding ignored groups via Admin Directory API...");
     for (let i = 0; i < groupList.length; i++) {
+      const groupEmail = groupList[i].toLowerCase();
       try {
-        const group = GroupsApp.getGroupByEmail(groupList[i]);
-        if (group) {
-          const users = group.getUsers();
-          for (let j = 0; j < users.length; j++) {
-            expandedEmails.push(users[j].getEmail().toLowerCase());
+        let pageToken;
+        do {
+          // Fetch members using Admin Directory API to bypass GroupsApp viewer restrictions
+          const response = AdminDirectory.Members.list(groupEmail, {
+            pageToken: pageToken,
+            maxResults: 200
+          });
+          
+          if (response.members && response.members.length > 0) {
+            response.members.forEach(function(member) {
+              if (member.email) {
+                expandedEmails.push(member.email.toLowerCase());
+              }
+            });
           }
-        }
+          pageToken = response.nextPageToken;
+        } while (pageToken);
+        console.log("DocKit: Successfully expanded " + expandedEmails.length + " member(s) from " + groupEmail);
       } catch (e) {
-        console.warn("DocKit: Could not expand group " + groupList[i] + ". Error: " + e.message);
+        console.warn("DocKit: Could not expand group " + groupEmail + " via Directory API. Error: " + e.message);
       }
     }
     // Cache for 1 hour (3600 seconds) to limit API usage
