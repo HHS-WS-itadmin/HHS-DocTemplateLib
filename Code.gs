@@ -9,7 +9,8 @@
 // const DOCKIT_VERSION = "V1.6.30b"; // Start Sync UPDATE (DELTA)
 // const DOCKIT_VERSION = "V1.6.40"; // Fix issue with IGNORED_GROUP_MEMBERS
 // const DOCKIT_VERSION = "V1.7.00d"; // DEPLOYED V7
-const DOCKIT_VERSION = "V1.8.00d"; // Fixing cache issues - Deployed V8
+// const DOCKIT_VERSION = "V1.8.00d"; // Fixing cache issues - Deployed V8
+const DOCKIT_VERSION = "V1.8.10"; // Adding Status badge colors
 
 /**************************************************************************************************
  * Library inserted in Apps Scripts as DocKit - has the following public functions:
@@ -1113,19 +1114,60 @@ function getDriveLabelChoices(labelId, fieldId, cacheKey) {
       labelId = 'labels/' + labelId;
     }
     
-    // Fetch the full schema
-    const label = DriveLabels.Labels.get(labelId, { view: "LABEL_VIEW_FULL" });
-    const field = label.fields.find(function(f) { return f.id === fieldId; });
+    // Fetch the full schema (use REST UrlFetchApp to bypass Advanced Service v2beta schema stripping)
+    const cleanId = labelId.startsWith('labels/') ? labelId : 'labels/' + labelId;
+    const url = "https://drivelabels.googleapis.com/v2/" + cleanId + "?view=LABEL_VIEW_FULL";
+    const resp = UrlFetchApp.fetch(url, {
+      method: "get",
+      headers: { "Authorization": "Bearer " + ScriptApp.getOAuthToken() },
+      muteHttpExceptions: true
+    });
+
+    if (resp.getResponseCode() !== 200) {
+      throw new Error("DriveLabels REST API Error (" + resp.getResponseCode() + "): " + resp.getContentText());
+    }
+
+    const label = JSON.parse(resp.getContentText());
+    const field = (label.fields || []).find(function(f) { return f.id === fieldId; });
     
     if (!field || !field.selectionOptions || !field.selectionOptions.choices) {
       throw new Error("Field ID " + fieldId + " not found or has no dropdown choices.");
     }
+
+    // Diagnostic log: inspect exact raw choice structure in Execution Logs
+    console.log("DocKit Raw Choice Sample [" + cacheKey + "]: " + JSON.stringify(field.selectionOptions.choices[0]));
     
-    // Map into a clean array and sort alphabetically
+    // Helper to convert Google RGB float object {red, green, blue} to hex string
+    const rgbToHex = function(rgbObj, fallbackHex) {
+      if (!rgbObj || (rgbObj.red === undefined && rgbObj.green === undefined && rgbObj.blue === undefined)) {
+        return fallbackHex;
+      }
+      const r = Math.round((rgbObj.red || 0) * 255);
+      const g = Math.round((rgbObj.green || 0) * 255);
+      const b = Math.round((rgbObj.blue || 0) * 255);
+      return "#" + [r, g, b].map(function(x) { return x.toString(16).padStart(2, '0'); }).join('');
+    };
+
+    // Map into a clean array using Google Drive's pre-computed displayHints.badgeColors
     const choices = field.selectionOptions.choices.map(function(choice) {
+      let bgColor = "#e8eaed";
+      let textColor = "#3c4043";
+
+      const badgeColors = choice.displayHints && choice.displayHints.badgeColors ? choice.displayHints.badgeColors : null;
+      if (badgeColors) {
+        bgColor = rgbToHex(badgeColors.backgroundColor, bgColor);
+        textColor = rgbToHex(badgeColors.foregroundColor, textColor);
+      } else if (choice.properties && choice.properties.badgeConfig && choice.properties.badgeConfig.color) {
+        bgColor = rgbToHex(choice.properties.badgeConfig.color, bgColor);
+      }
+
+      console.log("DocKit Label Choice [" + choice.properties.displayName + "] -> bg: " + bgColor + ", text: " + textColor);
+
       return {
         title: choice.properties.displayName,
-        value: choice.id 
+        value: choice.id,
+        bgColor: bgColor,
+        textColor: textColor
       };
     }).sort(function(a, b) { return a.title.localeCompare(b.title); });
     
@@ -1136,6 +1178,25 @@ function getDriveLabelChoices(labelId, fieldId, cacheKey) {
     console.error("DocKit: Error in getDriveLabelChoices for " + cacheKey + ": " + e.message);
     throw new Error("Failed to fetch label choices: " + e.message);
   }
+}
+
+/**
+ * Clears cached Drive Label dropdown schemas from DocKit's internal ScriptCache.
+ * 
+ * @param {Array<string>} [cacheKeys] - Optional list of base cache keys to remove.
+ */
+function clearDriveLabelCache(cacheKeys) {
+  const keys = cacheKeys || ["ITEM_TYPE_CHOICES", "STATUS_CHOICES", "VISIBILITY_CHOICES"];
+  const cache = CacheService.getScriptCache();
+  const keysToRemove = [];
+
+  keys.forEach(function(k) {
+    keysToRemove.push(k);
+    keysToRemove.push(k + "_" + DOCKIT_VERSION);
+  });
+
+  cache.removeAll(keysToRemove);
+  console.log("DocKit: Cleared label cache keys: " + keysToRemove.join(", "));
 }
 
 /**
