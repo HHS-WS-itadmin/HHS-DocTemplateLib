@@ -10,7 +10,9 @@
 // const DOCKIT_VERSION = "V1.6.40"; // Fix issue with IGNORED_GROUP_MEMBERS
 // const DOCKIT_VERSION = "V1.7.00d"; // DEPLOYED V7
 // const DOCKIT_VERSION = "V1.8.00d"; // Fixing cache issues - Deployed V8
-const DOCKIT_VERSION = "V1.8.10"; // Adding Status badge colors
+// const DOCKIT_VERSION = "V1.8.10"; // Adding Status badge colors
+// const DOCKIT_VERSION = "V1.8.20"; // Changing image links to preview
+const APP_VERSION = "V1.8.21"; // CLEAN-UP before deployment
 
 /**************************************************************************************************
  * Library inserted in Apps Scripts as DocKit - has the following public functions:
@@ -70,6 +72,22 @@ const DOCKIT_VERSION = "V1.8.10"; // Adding Status badge colors
 function getDocKitVersion() {
   console.log("DocKit: Serving library version: " + DOCKIT_VERSION);
   return DOCKIT_VERSION;
+}
+
+/***************************************************************************************************
+ * Converts a Google Drive File ID or existing Drive URL into a standardized preview URL.
+ * Format: https://drive.google.com/file/d/<FILE_ID>/preview?usp=drivesdk
+ * 
+ * @param {string} fileIdOrUrl - The Google Drive File ID or full Drive file URL.
+ * @returns {string} The standardized preview URL, or empty string if invalid.
+ */
+function getDrivePreviewUrl(fileIdOrUrl) {
+  if (!fileIdOrUrl || typeof fileIdOrUrl !== 'string') return "";
+  const match = fileIdOrUrl.match(/[-\w]{25,}/);
+  const fileId = match ? match[0] : fileIdOrUrl.trim();
+  const previewUrl = "https://drive.google.com/file/d/" + fileId + "/preview?usp=drivesdk";
+  console.log("DocKit: Generated preview URL -> " + previewUrl);
+  return previewUrl;
 }
 
 /***************************************************************************************************
@@ -739,6 +757,7 @@ function checkSharingRules(fileIds, targetRules, definedGroups, ignoredEmails) {
     const fileId = fileIds[i];
     let hasMismatch = false;
     let hasAdditional = false;
+    let hasInheritedViolation = false;
 
     try {
       // 1. Fetch live permissions using Advanced Drive Service
@@ -813,9 +832,6 @@ function checkSharingRules(fileIds, targetRules, definedGroups, ignoredEmails) {
         }
 
         matchedIdentifiers.push(permIdentifier);
-        
-        // Initialize the new violation flag at the top of the file loop
-        if (typeof hasInheritedViolation === 'undefined') { var hasInheritedViolation = false; }
 
         if (expectedPerms[permIdentifier]) {
            const expected = expectedPerms[permIdentifier];
@@ -1109,12 +1125,7 @@ function getDriveLabelChoices(labelId, fieldId, cacheKey) {
   }
 
   try {
-    // Ensure the required prefix is present for the advanced service
-    if (!labelId.startsWith('labels/')) {
-      labelId = 'labels/' + labelId;
-    }
-    
-    // Fetch the full schema (use REST UrlFetchApp to bypass Advanced Service v2beta schema stripping)
+    // Fetch the full schema via REST UrlFetchApp to bypass Advanced Service v2beta schema stripping
     const cleanId = labelId.startsWith('labels/') ? labelId : 'labels/' + labelId;
     const url = "https://drivelabels.googleapis.com/v2/" + cleanId + "?view=LABEL_VIEW_FULL";
     const resp = UrlFetchApp.fetch(url, {
@@ -1133,9 +1144,6 @@ function getDriveLabelChoices(labelId, fieldId, cacheKey) {
     if (!field || !field.selectionOptions || !field.selectionOptions.choices) {
       throw new Error("Field ID " + fieldId + " not found or has no dropdown choices.");
     }
-
-    // Diagnostic log: inspect exact raw choice structure in Execution Logs
-    console.log("DocKit Raw Choice Sample [" + cacheKey + "]: " + JSON.stringify(field.selectionOptions.choices[0]));
     
     // Helper to convert Google RGB float object {red, green, blue} to hex string
     const rgbToHex = function(rgbObj, fallbackHex) {
@@ -1160,8 +1168,6 @@ function getDriveLabelChoices(labelId, fieldId, cacheKey) {
       } else if (choice.properties && choice.properties.badgeConfig && choice.properties.badgeConfig.color) {
         bgColor = rgbToHex(choice.properties.badgeConfig.color, bgColor);
       }
-
-      console.log("DocKit Label Choice [" + choice.properties.displayName + "] -> bg: " + bgColor + ", text: " + textColor);
 
       return {
         title: choice.properties.displayName,
