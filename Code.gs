@@ -1,18 +1,12 @@
 // ==========================================
 // --- DocTemplate Library  --- (DocKit)
 // ==========================================
-// const DOCKIT_VERSION = "V1.4.0"; // Deployed 10/4/2026 as Version 4
-// const DOCKIT_VERSION = "V1.5.01"; // Adding Share (Access) functions --- Deployed 2026-10-16 @ 11:54 AM
-// const DOCKIT_VERSION = "V1.6.01"; // Adding functions for Collection sync app
-// const DOCKIT_VERSION = "V1.6.02"; // Adding getExpandedIgnoredEmails
-// const DOCKIT_VERSION = "V1.6.21"; // Added tree structure vizualization
-// const DOCKIT_VERSION = "V1.6.30b"; // Start Sync UPDATE (DELTA)
-// const DOCKIT_VERSION = "V1.6.40"; // Fix issue with IGNORED_GROUP_MEMBERS
 // const DOCKIT_VERSION = "V1.7.00d"; // DEPLOYED V7
 // const DOCKIT_VERSION = "V1.8.00d"; // Fixing cache issues - Deployed V8
 // const DOCKIT_VERSION = "V1.8.10"; // Adding Status badge colors
 // const DOCKIT_VERSION = "V1.8.20"; // Changing image links to preview
-const APP_VERSION = "V1.8.21"; // CLEAN-UP before deployment - DEPLOYED
+// const DOCKIT_VERSION = "V1.8.21"; // CLEAN-UP before deployment - DEPLOYED
+const DOCKIT_VERSION = "V1.8.22"; // Fix IGNORED_GROUP_MEMBERS bug
 
 /**************************************************************************************************
  * Library inserted in Apps Scripts as DocKit - has the following public functions:
@@ -58,6 +52,10 @@ const APP_VERSION = "V1.8.21"; // CLEAN-UP before deployment - DEPLOYED
  *    - Evaluates files against a target set of rules, returning a status code and list of violators.
  * applySharingRules(fileIds, targetRules, definedGroups, keepExtras, ignoredEmails)
  *    - Enforces rules by updating, adding, or removing user/group access automatically.
+ * syncIgnoredGroupsToProperties(ignoredGroupEmails, targetProperties, propertyKey)
+ *    - Expands group emails via AdminDirectory and persists the member list into ScriptProperties.
+ * getExpandedIgnoredEmails(baseIgnoredEmails, storedGroupMembers)
+ *    - Combines base ignored emails with pre-synced group member emails from ScriptProperties.
  *
  * Note: Functions ending in an underscore (e.g., generateZwsBoundaries_) are private internal helpers
  * 
@@ -1260,87 +1258,95 @@ function getDriveFileLabels(fileId, labelId) {
 }
 
 /***************************************************************************************************
- * Expands a list of internal groups into individual member emails and combines them with a standard ignored list.
- * Caches the result for 1 hour to optimize performance and minimize GroupsApp API calls.
+ * Expands a list of internal groups via Admin Directory API and saves the deduplicated member
+ * emails into the caller's ScriptProperties so non-admin users can read them without 403 errors.
+ * Must be executed by a Workspace Admin (e.g., via Purge Cache or a time-driven trigger).
  * 
- * @param {Array} baseIgnoredEmails - Array of individual email strings to ignore.
- * @param {Array} ignoredGroupEmails - Array of group email strings to expand.
- * @returns {Array} A combined, deduplicated array of all ignored emails (lowercased).
+ * @param {Array<string>} ignoredGroupEmails - Array of group email strings to expand.
+ * @param {GoogleAppsScript.Properties.Properties} targetProperties - The caller's PropertiesService.getScriptProperties().
+ * @param {string} [propertyKey="SYNCED_IGNORED_GROUP_MEMBERS"] - The property key to store the JSON array under.
+ * @returns {Array<string>} The deduplicated list of synced member emails (lowercased).
  **************************************************************************************************/
-function getExpandedIgnoredEmails(baseIgnoredEmails, ignoredGroupEmails) {
-  const baseList = baseIgnoredEmails || [];
+function syncIgnoredGroupsToProperties(ignoredGroupEmails, targetProperties, propertyKey) {
   const groupList = ignoredGroupEmails || [];
-  
+  const key = propertyKey || "SYNCED_IGNORED_GROUP_MEMBERS";
+
+  if (!targetProperties) {
+    throw new Error("DocKit.syncIgnoredGroupsToProperties requires targetProperties (PropertiesService.getScriptProperties()).");
+  }
+
   if (groupList.length === 0) {
-    return baseList.map(function(e) { return e.toLowerCase(); });
+    targetProperties.setProperty(key, JSON.stringify([]));
+    console.log("DocKit: No ignored groups configured. Saved empty array to " + key + ".");
+    return [];
   }
 
-  const cache = CacheService.getScriptCache();
-  const cacheKey = "IGNORED_GROUPS_" + groupList.join("_").replace(/[^a-zA-Z0-9]/g, '');
-  const cachedData = cache.get(cacheKey);
+  console.log("DocKit: Syncing " + groupList.length + " ignored group(s) via Admin Directory API...");
+  const expandedEmails = [];
 
-  let expandedEmails = [];
-  if (cachedData) {
-    expandedEmails = JSON.parse(cachedData);
-    console.log("DocKit: Loaded " + expandedEmails.length + " ignored group email(s) from cache.");
-  } else {
-    console.log("DocKit: Expanding ignored groups via Admin Directory API...");
-    let hadApiSuccess = false;
+  for (let i = 0; i < groupList.length; i++) {
+    const groupEmail = groupList[i].toLowerCase().trim();
+    if (!groupEmail) continue;
 
-    for (let i = 0; i < groupList.length; i++) {
-      const groupEmail = groupList[i].toLowerCase();
-      try {
-        let pageToken;
-        do {
-          // Fetch members using Admin Directory API to bypass GroupsApp viewer restrictions
-          const response = AdminDirectory.Members.list(groupEmail, {
-            pageToken: pageToken,
-            maxResults: 200
-          });
-          
-          if (response.members && response.members.length > 0) {
-            response.members.forEach(function(member) {
-              if (member.email) {
-                expandedEmails.push(member.email.toLowerCase());
-              }
-            });
+    let pageToken;
+    do {
+      const response = AdminDirectory.Members.list(groupEmail, {
+        pageToken: pageToken,
+        maxResults: 200
+      });
+
+      if (response.members && response.members.length > 0) {
+        response.members.forEach(function(member) {
+          if (member.email) {
+            expandedEmails.push(member.email.toLowerCase().trim());
           }
-          pageToken = response.nextPageToken;
-        } while (pageToken);
-        hadApiSuccess = true;
-        console.log("DocKit: Successfully expanded " + expandedEmails.length + " member(s) from " + groupEmail);
-      } catch (e) {
-        console.warn("DocKit: Could not expand group " + groupEmail + " via Directory API. Error: " + e.message);
+        });
       }
-    }
+      pageToken = response.nextPageToken;
+    } while (pageToken);
 
-    // Only cache if at least one group lookup succeeded so non-admin 403 errors never poison the cache
-    if (hadApiSuccess) {
-      cache.put(cacheKey, JSON.stringify(expandedEmails), 3600);
-      console.log("DocKit: Cached " + expandedEmails.length + " expanded group email(s) for 1 hour.");
-    } else {
-      console.warn("DocKit: Skipping cache write because group expansion did not succeed.");
-    }
+    console.log("DocKit: Expanded group " + groupEmail + " (running total: " + expandedEmails.length + " member(s)).");
   }
 
-  // Combine and deduplicate
-  const combined = baseList.map(function(e) { return e.toLowerCase(); }).concat(expandedEmails);
-  return Array.from(new Set(combined));
+  const uniqueEmails = Array.from(new Set(expandedEmails));
+  targetProperties.setProperty(key, JSON.stringify(uniqueEmails));
+  console.log("DocKit: Saved " + uniqueEmails.length + " unique ignored group member(s) to ScriptProperties['" + key + "'].");
+  return uniqueEmails;
 }
 
 /***************************************************************************************************
- * Clears the cached ignored group members so the next permission check fetches fresh data.
+ * Combines base ignored emails with pre-synced group member emails stored in ScriptProperties.
+ * Never calls AdminDirectory directly so non-admin users can run permission checks cleanly.
  * 
- * @param {Array} ignoredGroupEmails - Array of group email strings matching the cache key.
+ * @param {Array<string>} baseIgnoredEmails - Array of individual email strings to ignore.
+ * @param {Array<string>|string} storedGroupMembers - Array or JSON string of synced member emails from ScriptProperties.
+ * @returns {Array<string>} A combined, deduplicated array of all ignored emails (lowercased).
  **************************************************************************************************/
-function clearIgnoredGroupsCache(ignoredGroupEmails) {
-  const groupList = ignoredGroupEmails || [];
-  if (groupList.length === 0) return;
+function getExpandedIgnoredEmails(baseIgnoredEmails, storedGroupMembers) {
+  const baseList = Array.isArray(baseIgnoredEmails) ? baseIgnoredEmails : [];
+  let groupMembers = [];
 
-  const cache = CacheService.getScriptCache();
-  const cacheKey = "IGNORED_GROUPS_" + groupList.join("_").replace(/[^a-zA-Z0-9]/g, '');
-  cache.remove(cacheKey);
-  console.log("DocKit: Removed cache key " + cacheKey);
+  if (Array.isArray(storedGroupMembers)) {
+    groupMembers = storedGroupMembers;
+  } else if (typeof storedGroupMembers === "string" && storedGroupMembers.trim() !== "") {
+    try {
+      const parsed = JSON.parse(storedGroupMembers);
+      if (Array.isArray(parsed)) {
+        groupMembers = parsed;
+      }
+    } catch (e) {
+      console.warn("DocKit: Could not parse storedGroupMembers JSON: " + e.message);
+    }
+  }
+
+  const combined = baseList
+    .concat(groupMembers)
+    .filter(function(e) { return typeof e === "string" && e.trim() !== ""; })
+    .map(function(e) { return e.toLowerCase().trim(); });
+
+  const uniqueCombined = Array.from(new Set(combined));
+  console.log("DocKit: Resolved " + uniqueCombined.length + " total ignored email(s) (" + baseList.length + " base, " + groupMembers.length + " synced group members).");
+  return uniqueCombined;
 }
 
 /***************************************************************************************************
