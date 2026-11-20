@@ -12,7 +12,7 @@
 // const DOCKIT_VERSION = "V1.8.00d"; // Fixing cache issues - Deployed V8
 // const DOCKIT_VERSION = "V1.8.10"; // Adding Status badge colors
 // const DOCKIT_VERSION = "V1.8.20"; // Changing image links to preview
-const APP_VERSION = "V1.8.21"; // CLEAN-UP before deployment
+const APP_VERSION = "V1.8.21"; // CLEAN-UP before deployment - DEPLOYED
 
 /**************************************************************************************************
  * Library inserted in Apps Scripts as DocKit - has the following public functions:
